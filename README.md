@@ -152,6 +152,8 @@ poetry run python dictate.py --debug-keys
 ```
 Use this to find the actual key name your keyboard is sending, then set it in `~/.config/soupawhisper/config.ini`.
 
+On Wayland, SoupaWhisper only watches keyboard events for the configured hotkey. It does not grab or replay your keyboard input.
+
 On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not work in native Wayland apps.
 
 **cuDNN errors with GPU:**

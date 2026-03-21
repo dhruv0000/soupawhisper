@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from select import select
 
-from evdev import InputDevice, UInput, ecodes, list_devices
+from evdev import InputDevice, ecodes, list_devices
 from faster_whisper import WhisperModel
 
 __version__ = "0.1.0"
@@ -129,10 +129,6 @@ def user_is_listed_in_group(group_name):
     return os.environ.get("USER", "") in group.gr_mem
 
 
-def device_supports_hotkey(device):
-    return EVDEV_HOTKEY in device.capabilities().get(ecodes.EV_KEY, [])
-
-
 def get_keyboard_devices(hotkey_only=False):
     devices = {}
 
@@ -188,39 +184,6 @@ def close_keyboard_devices(devices):
             device.close()
         except OSError:
             pass
-
-
-def grab_keyboard_devices(devices):
-    for path in list(devices):
-        try:
-            devices[path].grab()
-        except OSError as e:
-            if e.errno == errno.ENODEV:
-                try:
-                    devices[path].close()
-                except OSError:
-                    pass
-                devices.pop(path, None)
-                continue
-            raise
-
-
-def ungrab_keyboard_devices(devices):
-    for device in devices.values():
-        try:
-            device.ungrab()
-        except OSError:
-            pass
-
-
-def create_virtual_keyboard(devices):
-    if not devices:
-        return None
-    return UInput.from_device(
-        *devices.values(),
-        filtered_types=(ecodes.EV_SYN, ecodes.EV_FF),
-        name="SoupaWhisper Virtual Keyboard",
-    )
 
 
 def debug_keys():
@@ -434,24 +397,15 @@ class Dictation:
             sys.exit(1)
 
         print(f"Wayland detected. Using evdev global hotkey listener for [{HOTKEY_LABEL}].")
+        print("Keyboard devices are only being watched, not grabbed.")
         if AUTO_TYPE:
             print("Wayland note: clipboard copy should work, but xdotool auto-typing may fail in native Wayland apps.")
 
-        virtual_keyboard = None
         try:
-            virtual_keyboard = create_virtual_keyboard(devices)
-            grab_keyboard_devices(devices)
             while True:
                 ready, _, _ = select(list(devices.values()), [], [], 2.0)
                 if not ready:
-                    original_paths = set(devices)
                     refresh_keyboard_devices(devices, hotkey_only=True)
-                    if set(devices) != original_paths:
-                        ungrab_keyboard_devices(devices)
-                        if virtual_keyboard:
-                            virtual_keyboard.close()
-                        virtual_keyboard = create_virtual_keyboard(devices)
-                        grab_keyboard_devices(devices)
                     if not devices:
                         time.sleep(0.5)
                     continue
@@ -461,13 +415,7 @@ class Dictation:
                     except OSError as e:
                         if e.errno == errno.ENODEV:
                             devices.pop(device.path, None)
-                            ungrab_keyboard_devices(devices)
                             refresh_keyboard_devices(devices, hotkey_only=True)
-                            if virtual_keyboard:
-                                virtual_keyboard.close()
-                            virtual_keyboard = create_virtual_keyboard(devices)
-                            if devices:
-                                grab_keyboard_devices(devices)
                             continue
                         raise
 
@@ -477,14 +425,7 @@ class Dictation:
                                 self.start_recording()
                             elif event.value == 0:
                                 self.stop_recording()
-                            continue
-
-                        if virtual_keyboard is not None:
-                            virtual_keyboard.write_event(event)
         finally:
-            ungrab_keyboard_devices(devices)
-            if virtual_keyboard:
-                virtual_keyboard.close()
             close_keyboard_devices(devices)
 
     def run(self):
