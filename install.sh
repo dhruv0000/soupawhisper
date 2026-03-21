@@ -86,9 +86,6 @@ install_service() {
 
     mkdir -p "$SERVICE_DIR"
 
-    # Get current display settings
-    local display="${DISPLAY:-:0}"
-    local xauthority="${XAUTHORITY:-$HOME/.Xauthority}"
     local venv_path="$SCRIPT_DIR/.venv"
 
     # Check if venv exists
@@ -104,13 +101,9 @@ After=graphical-session.target
 [Service]
 Type=simple
 WorkingDirectory=$SCRIPT_DIR
-ExecStart=$venv_path/bin/python $SCRIPT_DIR/dictate.py
+ExecStart=$venv_path/bin/python -u $SCRIPT_DIR/dictate.py
 Restart=on-failure
 RestartSec=5
-
-# X11 display access
-Environment=DISPLAY=$display
-Environment=XAUTHORITY=$xauthority
 
 [Install]
 WantedBy=default.target

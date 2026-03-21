@@ -6,7 +6,8 @@ A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold 
 
 - Python 3.10+
 - Poetry
-- Linux with X11 (ALSA audio)
+- Linux with ALSA audio
+- X11, or Wayland with access to the `input` group for global hotkeys
 
 ## Supported Distros
 
@@ -73,6 +74,8 @@ poetry run python dictate.py
 - Hold **F12** to record
 - Release to transcribe → copies to clipboard and types into active input
 - Press **Ctrl+C** to quit (when running manually)
+- On media-key-first keyboards, you may need **Fn+F12** unless you switch the top row to function-key mode
+- To inspect what key your system is actually sending, run `poetry run python dictate.py --debug-keys`
 
 ## Run as a systemd Service
 
@@ -122,7 +125,8 @@ notifications = true
 Create the config directory and file if it doesn't exist:
 ```bash
 mkdir -p ~/.config/soupawhisper
-cp /path/to/soupawhisper/config.example.ini ~/.config/soupawhisper/config.ini
+# ./ is '/path/to/soupawhisper/'
+cp ./config.example.ini ~/.config/soupawhisper/config.ini
 ```
 
 ## Troubleshooting
@@ -139,8 +143,16 @@ arecord -d 3 test.wav && aplay test.wav
 **Permission issues with keyboard:**
 ```bash
 sudo usermod -aG input $USER
-# Then log out and back in
+# Then log out completely and back in before restarting the service
 ```
+
+**Wayland notes:**
+```bash
+poetry run python dictate.py --debug-keys
+```
+Use this to find the actual key name your keyboard is sending, then set it in `~/.config/soupawhisper/config.ini`.
+
+On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not work in native Wayland apps.
 
 **cuDNN errors with GPU:**
 ```
