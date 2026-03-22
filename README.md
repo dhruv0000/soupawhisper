@@ -1,5 +1,7 @@
 # SoupaWhisper
 
+Note: This fork is for Wayland and AMD GPU support
+
 A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
 
 ## Requirements
