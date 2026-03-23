@@ -1,6 +1,6 @@
 # SoupaWhisper
 
-Note: This fork is for Wayland and AMD GPU support
+This fork adds Wayland support, evdev global hotkeys, and related Linux/service fixes.
 
 A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
 
@@ -154,7 +154,9 @@ poetry run python dictate.py --debug-keys
 ```
 Use this to find the actual key name your keyboard is sending, then set it in `~/.config/soupawhisper/config.ini`.
 
-On Wayland, SoupaWhisper only watches keyboard events for the configured hotkey. It does not grab or replay your keyboard input.
+On Wayland, SoupaWhisper only watches keyboard events for the configured hotkey. It does not grab or replay your keyboard input, because partial grabs can leave mismatched key press/release state behind.
+
+Use a non-typing hotkey such as `F12`, `Scroll Lock`, or `Pause` on Wayland. If you bind a normal character key, that key can still reach the focused app.
 
 On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not work in native Wayland apps.
 

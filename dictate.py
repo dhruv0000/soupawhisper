@@ -226,12 +226,14 @@ def debug_keys():
 class Dictation:
     def __init__(self):
         self.recording = False
+        self.processing = False
         self.record_process = None
         self.temp_file = None
         self.model = None
         self.model_loaded = threading.Event()
         self.model_error = None
         self.running = True
+        self.state_lock = threading.Lock()
 
         print(f"Loading Whisper model ({MODEL_SIZE})...")
         threading.Thread(target=self._load_model, daemon=True).start()
@@ -268,56 +270,90 @@ class Dictation:
         )
 
     def start_recording(self):
-        if self.recording or self.model_error:
+        with self.state_lock:
+            if self.recording or self.processing or self.model_error:
+                return
+
+        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        temp_file.close()
+
+        try:
+            record_process = subprocess.Popen(
+                [
+                    "arecord",
+                    "-f",
+                    "S16_LE",
+                    "-r",
+                    "16000",
+                    "-c",
+                    "1",
+                    "-t",
+                    "wav",
+                    temp_file.name,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            if os.path.exists(temp_file.name):
+                os.unlink(temp_file.name)
+            print(f"Failed to start recording: {e}")
+            self.notify("Error", "Unable to start recording", "dialog-error", 3000)
             return
 
-        self.recording = True
-        self.temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        self.temp_file.close()
+        with self.state_lock:
+            self.recording = True
+            self.record_process = record_process
+            self.temp_file = temp_file.name
 
-        self.record_process = subprocess.Popen(
-            [
-                "arecord",
-                "-f",
-                "S16_LE",
-                "-r",
-                "16000",
-                "-c",
-                "1",
-                "-t",
-                "wav",
-                self.temp_file.name,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
         print("Recording...")
         self.notify("Recording...", f"Release {HOTKEY_LABEL.upper()} when done", "audio-input-microphone", 30000)
 
     def stop_recording(self):
-        if not self.recording:
-            return
+        with self.state_lock:
+            if not self.recording or self.processing:
+                return
 
-        self.recording = False
-
-        if self.record_process:
-            self.record_process.terminate()
-            self.record_process.wait()
+            self.recording = False
+            self.processing = True
+            record_process = self.record_process
+            temp_file = self.temp_file
             self.record_process = None
+            self.temp_file = None
 
-        print("Transcribing...")
-        self.notify("Transcribing...", "Processing your speech", "emblem-synchronizing", 30000)
+        threading.Thread(
+            target=self._finish_recording,
+            args=(record_process, temp_file),
+            daemon=True,
+        ).start()
 
-        self.model_loaded.wait()
-
-        if self.model_error:
-            print("Cannot transcribe: model failed to load")
-            self.notify("Error", "Model failed to load", "dialog-error", 3000)
-            return
-
+    def _finish_recording(self, record_process, temp_file):
         try:
+            if record_process:
+                record_process.terminate()
+                try:
+                    record_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    record_process.kill()
+                    record_process.wait()
+
+            if not temp_file or not os.path.exists(temp_file):
+                print("Recording file missing")
+                self.notify("Error", "Recording file missing", "dialog-error", 3000)
+                return
+
+            print("Transcribing...")
+            self.notify("Transcribing...", "Processing your speech", "emblem-synchronizing", 30000)
+
+            self.model_loaded.wait()
+
+            if self.model_error:
+                print("Cannot transcribe: model failed to load")
+                self.notify("Error", "Model failed to load", "dialog-error", 3000)
+                return
+
             segments, _info = self.model.transcribe(
-                self.temp_file.name,
+                temp_file,
                 beam_size=5,
                 vad_filter=True,
             )
@@ -356,8 +392,10 @@ class Dictation:
             print(f"Error: {e}")
             self.notify("Error", str(e)[:50], "dialog-error", 3000)
         finally:
-            if self.temp_file and os.path.exists(self.temp_file.name):
-                os.unlink(self.temp_file.name)
+            if temp_file and os.path.exists(temp_file):
+                os.unlink(temp_file)
+            with self.state_lock:
+                self.processing = False
 
     def on_press(self, key):
         if key == HOTKEY:
@@ -397,7 +435,8 @@ class Dictation:
             sys.exit(1)
 
         print(f"Wayland detected. Using evdev global hotkey listener for [{HOTKEY_LABEL}].")
-        print("Keyboard devices are only being watched, not grabbed.")
+        print("Keyboard devices are only watched on Wayland; they are not grabbed.")
+        print(f"Use a non-typing hotkey such as [{HOTKEY_LABEL}] to avoid stray key input.")
         if AUTO_TYPE:
             print("Wayland note: clipboard copy should work, but xdotool auto-typing may fail in native Wayland apps.")
 
