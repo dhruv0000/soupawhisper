@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install SoupaWhisper on Linux
-# Supports: Ubuntu, Pop!_OS, Debian, Fedora, Arch
+# Supports: Ubuntu, Pop!_OS, Debian, Fedora, Arch, openSUSE
 
 set -e
 
@@ -152,6 +152,7 @@ main() {
     echo ""
     echo "Config: $CONFIG_DIR/config.ini"
     echo "Hotkey: F12 (hold to record)"
+    echo "GPU:    Set device = cuda for NVIDIA or device = amd for ROCm-enabled AMD setups"
     echo "Exit:   Ctrl+C"
 }
 

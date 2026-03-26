@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from select import select
 
+import ctranslate2
 from evdev import InputDevice, ecodes, list_devices
 from faster_whisper import WhisperModel
 
@@ -40,6 +41,28 @@ DEPENDENCY_PACKAGES = {
     "xclip": "xclip",
     "xdotool": "xdotool",
 }
+DEVICE_ALIASES = {
+    "cpu": "cpu",
+    "auto": "auto",
+    "cuda": "cuda",
+    "gpu": "cuda",
+    "nvidia": "cuda",
+    "amd": "cuda",
+    "rocm": "cuda",
+    "hip": "cuda",
+}
+DEVICE_LABELS = {
+    "cpu": "CPU",
+    "auto": "Auto",
+    "cuda": "NVIDIA GPU",
+    "gpu": "GPU",
+    "nvidia": "NVIDIA GPU",
+    "amd": "AMD GPU (ROCm)",
+    "rocm": "AMD GPU (ROCm)",
+    "hip": "AMD GPU (ROCm)",
+}
+AMD_DEVICE_NAMES = frozenset({"amd", "rocm", "hip"})
+GPU_DEVICE_NAMES = frozenset({"cuda", "gpu", "nvidia", "amd", "rocm", "hip"})
 
 
 def load_env_file(env_path):
@@ -90,96 +113,54 @@ load_env_file(ENV_PATH)
 CONFIG = load_config()
 SESSION_TYPE = os.environ.get("XDG_SESSION_TYPE", "unknown").lower() or "unknown"
 PYNPUT_KEYBOARD = None
-HOTKEY_ALIASES = {
-    "control": "ctrl",
-    "ctl": "ctrl",
-    "option": "alt",
-    "super": "meta",
-    "win": "meta",
-    "windows": "meta",
-    "cmd": "meta",
-    "command": "meta",
-    "escape": "esc",
-    "return": "enter",
-    "spacebar": "space",
-    "scrolllock": "scroll_lock",
-    "capslock": "caps_lock",
-    "numlock": "num_lock",
-    "pageup": "page_up",
-    "pagedown": "page_down",
-    "pgup": "page_up",
-    "pgdn": "page_down",
-    "leftctrl": "left_ctrl",
-    "leftcontrol": "left_ctrl",
-    "ctrl_l": "left_ctrl",
-    "rightctrl": "right_ctrl",
-    "rightcontrol": "right_ctrl",
-    "ctrl_r": "right_ctrl",
-    "leftalt": "left_alt",
-    "alt_l": "left_alt",
-    "rightalt": "right_alt",
-    "alt_r": "right_alt",
-    "altgr": "right_alt",
-    "alt_gr": "right_alt",
-    "leftshift": "left_shift",
-    "shift_l": "left_shift",
-    "rightshift": "right_shift",
-    "shift_r": "right_shift",
-    "leftmeta": "left_meta",
-    "meta_l": "left_meta",
-    "super_l": "left_meta",
-    "win_l": "left_meta",
-    "cmd_l": "left_meta",
-    "rightmeta": "right_meta",
-    "meta_r": "right_meta",
-    "super_r": "right_meta",
-    "win_r": "right_meta",
-    "cmd_r": "right_meta",
-}
-HOTKEY_MATCH_ALIASES = {
-    "ctrl": frozenset({"ctrl", "left_ctrl", "right_ctrl"}),
-    "alt": frozenset({"alt", "left_alt", "right_alt"}),
-    "shift": frozenset({"shift", "left_shift", "right_shift"}),
-    "meta": frozenset({"meta", "left_meta", "right_meta"}),
-}
-EVDEV_KEY_ALIASES = {
-    "esc": "KEY_ESC",
+PYNPUT_KEY_NAMES = {
+    "ctrl": "KEY_LEFTCTRL",
+    "ctrl_l": "KEY_LEFTCTRL",
+    "ctrl_r": "KEY_RIGHTCTRL",
+    "alt": "KEY_LEFTALT",
+    "alt_l": "KEY_LEFTALT",
+    "alt_r": "KEY_RIGHTALT",
+    "alt_gr": "KEY_RIGHTALT",
+    "shift": "KEY_LEFTSHIFT",
+    "shift_l": "KEY_LEFTSHIFT",
+    "shift_r": "KEY_RIGHTSHIFT",
+    "cmd": "KEY_LEFTMETA",
+    "cmd_l": "KEY_LEFTMETA",
+    "cmd_r": "KEY_RIGHTMETA",
+    "meta": "KEY_LEFTMETA",
+    "meta_l": "KEY_LEFTMETA",
+    "meta_r": "KEY_RIGHTMETA",
+    "super_l": "KEY_LEFTMETA",
+    "super_r": "KEY_RIGHTMETA",
+    "space": "KEY_SPACE",
     "enter": "KEY_ENTER",
+    "esc": "KEY_ESC",
     "page_up": "KEY_PAGEUP",
     "page_down": "KEY_PAGEDOWN",
     "scroll_lock": "KEY_SCROLLLOCK",
     "caps_lock": "KEY_CAPSLOCK",
     "num_lock": "KEY_NUMLOCK",
-    "left_ctrl": "KEY_LEFTCTRL",
-    "right_ctrl": "KEY_RIGHTCTRL",
-    "left_alt": "KEY_LEFTALT",
-    "right_alt": "KEY_RIGHTALT",
-    "left_shift": "KEY_LEFTSHIFT",
-    "right_shift": "KEY_RIGHTSHIFT",
-    "left_meta": "KEY_LEFTMETA",
-    "right_meta": "KEY_RIGHTMETA",
-}
-EVDEV_GROUP_CODES = {
-    "ctrl": frozenset({ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL}),
-    "alt": frozenset({ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT}),
-    "shift": frozenset({ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT}),
-    "meta": frozenset({ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA}),
 }
 
 
 def normalize_key_name(key_name):
-    return key_name.strip().lower().replace("-", "_").replace(" ", "_")
+    return key_name.strip().replace("-", "_").replace(" ", "_").upper()
 
 
-def canonicalize_hotkey_part(key_name):
-    return HOTKEY_ALIASES.get(normalize_key_name(key_name), normalize_key_name(key_name))
+def normalize_hotkey_part(key_name):
+    key_name = normalize_key_name(key_name)
+    if not key_name:
+        return ""
+    if key_name.startswith("KEY_"):
+        return key_name
+    return f"KEY_{key_name}"
 
 
 def parse_hotkey(key_name):
     return tuple(
-        canonicalize_hotkey_part(part)
+        normalize_hotkey_part(part)
         for part in key_name.split("+")
-        if normalize_key_name(part)
+        if normalize_hotkey_part(part)
     )
 
 
@@ -189,6 +170,83 @@ def parse_hotkeys(key_names):
         for hotkey in (parse_hotkey(key_name) for key_name in key_names.split(","))
         if hotkey
     )
+
+
+def normalize_device_name(device_name):
+    return device_name.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def format_supported_device_names():
+    return ", ".join(sorted(DEVICE_ALIASES))
+
+
+def resolve_runtime_device(device_name):
+    requested_device = normalize_device_name(device_name)
+    backend_device = DEVICE_ALIASES.get(requested_device)
+    if backend_device is None:
+        raise ValueError(
+            f"Unsupported device '{device_name}'. Supported values: {format_supported_device_names()}"
+        )
+
+    return {
+        "requested": requested_device,
+        "backend": backend_device,
+        "label": DEVICE_LABELS[requested_device],
+    }
+
+
+def format_compute_types(compute_types):
+    return ", ".join(sorted(compute_types))
+
+
+def has_rocm_runtime():
+    return shutil.which("rocminfo") is not None or shutil.which("hipconfig") is not None
+
+
+def get_runtime_hint(runtime_device, error_text=None):
+    requested_device = runtime_device["requested"]
+
+    if requested_device in AMD_DEVICE_NAMES:
+        return (
+            "Hint: AMD GPUs require a ROCm-enabled CTranslate2 install. "
+            "Keep device = amd (or rocm), use compute_type = float16, and install ROCm plus a ROCm build of CTranslate2. "
+            "If ROCm is not installed yet, switch back to device = cpu."
+        )
+
+    if requested_device in GPU_DEVICE_NAMES:
+        return (
+            "Hint: GPU mode requires a working CTranslate2 GPU runtime. "
+            "For NVIDIA, install the required CUDA/cuDNN stack. "
+            "For AMD, use device = amd with ROCm and a ROCm-enabled CTranslate2 build."
+        )
+
+    if requested_device == "cpu" and error_text:
+        return "Hint: Try compute_type = int8 or compute_type = float32 on CPU."
+
+    return None
+
+
+def validate_runtime_config(runtime_device, compute_type):
+    backend_device = runtime_device["backend"]
+
+    if runtime_device["requested"] in AMD_DEVICE_NAMES and not has_rocm_runtime():
+        error_text = "ROCm tools were not found on this system (missing rocminfo/hipconfig)."
+        return False, error_text, get_runtime_hint(runtime_device, error_text)
+
+    try:
+        supported_compute_types = ctranslate2.get_supported_compute_types(backend_device)
+    except Exception as e:
+        error_text = str(e)
+        return False, error_text, get_runtime_hint(runtime_device, error_text)
+
+    if compute_type != "default" and compute_type not in supported_compute_types:
+        error_text = (
+            f"compute_type '{compute_type}' is not supported for device '{runtime_device['requested']}'. "
+            f"Supported compute types: {format_compute_types(supported_compute_types)}"
+        )
+        return False, error_text, get_runtime_hint(runtime_device, error_text)
+
+    return True, None, None
 
 
 def get_pynput_keyboard():
@@ -204,28 +262,19 @@ def get_pynput_keyboard():
 
 
 def get_pynput_key_name(key):
+    char = getattr(key, "char", None)
+    if char:
+        return normalize_hotkey_part("space" if char == " " else char)
+
     key_name = getattr(key, "name", None)
     if key_name:
-        return canonicalize_hotkey_part(key_name)
-
-    char = getattr(key, "char", None)
-    if char == " ":
-        return "space"
-    if char:
-        return canonicalize_hotkey_part(char)
+        return PYNPUT_KEY_NAMES.get(key_name, normalize_hotkey_part(key_name))
 
     return None
 
 
 def get_evdev_hotkey_codes(key_name):
-    """Map a hotkey part to one or more evdev keycodes."""
-    key_name = canonicalize_hotkey_part(key_name)
-
-    if key_name in EVDEV_GROUP_CODES:
-        return EVDEV_GROUP_CODES[key_name]
-
-    candidate = EVDEV_KEY_ALIASES.get(key_name, f"KEY_{key_name.upper()}")
-    keycode = getattr(ecodes, candidate, None)
+    keycode = getattr(ecodes, normalize_hotkey_part(key_name), None)
     if keycode is None:
         return None
 
@@ -261,23 +310,11 @@ def get_evdev_key_name(code):
         key_name = key_name[0]
     if not key_name:
         return None
-    if key_name.startswith("KEY_"):
-        key_name = key_name[4:]
-    return canonicalize_hotkey_part(key_name)
-
-
-def get_hotkey_match_names(key_part):
-    return HOTKEY_MATCH_ALIASES.get(key_part, frozenset({key_part}))
-
-
-def format_hotkey_part(key_part):
-    if len(key_part) == 1 and key_part.isalnum():
-        return key_part.upper()
-    return key_part.replace("_", " ").title()
+    return key_name
 
 
 def format_hotkey_name(key_parts):
-    return "+".join(format_hotkey_part(part) for part in key_parts)
+    return "+".join(key_parts)
 
 
 def format_hotkey_names(hotkeys):
@@ -285,14 +322,24 @@ def format_hotkey_names(hotkeys):
 
 
 HOTKEYS = parse_hotkeys(CONFIG["key"])
-HOTKEY_MATCH_GROUPS = tuple(
-    tuple(get_hotkey_match_names(part) for part in hotkey)
-    for hotkey in HOTKEYS
-)
 EVDEV_HOTKEY_GROUPS, EVDEV_UNSUPPORTED_HOTKEYS = build_evdev_hotkeys(HOTKEYS)
 HOTKEY_LABEL = format_hotkey_names(HOTKEYS) if HOTKEYS else CONFIG["key"].strip()
 MODEL_SIZE = CONFIG["model"]
 DEVICE = CONFIG["device"]
+INVALID_DEVICE_ERROR = None
+
+try:
+    RUNTIME_DEVICE = resolve_runtime_device(CONFIG["device"])
+except ValueError as e:
+    INVALID_DEVICE_ERROR = str(e)
+    RUNTIME_DEVICE = {
+        "requested": normalize_device_name(CONFIG["device"]),
+        "backend": "cpu",
+        "label": f"Unsupported device ({CONFIG['device']})",
+    }
+
+DEVICE_BACKEND = RUNTIME_DEVICE["backend"]
+DEVICE_LABEL = RUNTIME_DEVICE["label"]
 COMPUTE_TYPE = CONFIG["compute_type"]
 AUTO_TYPE = CONFIG["auto_type"]
 NOTIFICATIONS = CONFIG["notifications"]
@@ -441,12 +488,24 @@ class Dictation:
         self.evdev_pressed_keys = set()
         self.hotkey_active = False
 
-        print(f"Loading Whisper model ({MODEL_SIZE})...")
+        print(f"Loading Whisper model ({MODEL_SIZE}) on {DEVICE_LABEL}...")
         threading.Thread(target=self._load_model, daemon=True).start()
 
     def _load_model(self):
+        hint = None
         try:
-            self.model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
+            if INVALID_DEVICE_ERROR:
+                raise RuntimeError(INVALID_DEVICE_ERROR)
+
+            is_valid, error_text, hint = validate_runtime_config(RUNTIME_DEVICE, COMPUTE_TYPE)
+            if not is_valid:
+                raise RuntimeError(error_text)
+
+            self.model = WhisperModel(
+                MODEL_SIZE,
+                device=DEVICE_BACKEND,
+                compute_type=COMPUTE_TYPE,
+            )
             self.model_loaded.set()
             print("Model loaded. Ready for dictation!")
             print(f"Hold [{HOTKEY_LABEL}] to record, release to transcribe.")
@@ -455,8 +514,9 @@ class Dictation:
             self.model_error = str(e)
             self.model_loaded.set()
             print(f"Failed to load model: {e}")
-            if "cudnn" in str(e).lower() or "cuda" in str(e).lower():
-                print("Hint: Try setting device = cpu in your config, or install cuDNN.")
+            hint = hint or get_runtime_hint(RUNTIME_DEVICE, str(e))
+            if hint:
+                print(hint)
 
     def notify(self, title, message, icon="dialog-information", timeout=2000):
         """Send a desktop notification."""
@@ -621,8 +681,8 @@ class Dictation:
 
     def update_hotkey_state(self, pressed_keys):
         hotkey_pressed = any(
-            all(bool(match_names & pressed_keys) for match_names in hotkey_match_parts)
-            for hotkey_match_parts in HOTKEY_MATCH_GROUPS
+            all(part in pressed_keys for part in hotkey_parts)
+            for hotkey_parts in HOTKEYS
         )
 
         if hotkey_pressed and not self.hotkey_active:
@@ -657,7 +717,7 @@ class Dictation:
     def run_evdev_listener(self):
         if not HOTKEYS:
             print(f"Invalid hotkey: {CONFIG['key']}")
-            print("Set [hotkey] key to a key name such as f12, a combo like ctrl+space, or a list like f12, ctrl+space.")
+            print("Set SOUPAWHISPER_KEYS to one or more KEY_* names from --debug-keys, such as KEY_F12 or KEY_LEFTCTRL+KEY_SPACE.")
             sys.exit(1)
 
         if not EVDEV_HOTKEY_GROUPS:
@@ -684,9 +744,6 @@ class Dictation:
         if EVDEV_UNSUPPORTED_HOTKEYS:
             for hotkey, unsupported_parts in EVDEV_UNSUPPORTED_HOTKEYS:
                 print(f"Ignoring unsupported hotkey [{format_hotkey_name(hotkey)}]: {', '.join(unsupported_parts)}")
-        if any(len(part) == 1 and part.isalnum() for hotkey in HOTKEYS for part in hotkey):
-            print("Wayland note: character-key hotkeys can still reach the focused app.")
-            print("Dedicated keys like F12, Scroll Lock, or Pause are less likely to conflict.")
         if AUTO_TYPE:
             print("Wayland note: clipboard copy should work, but xdotool auto-typing may fail in native Wayland apps.")
 

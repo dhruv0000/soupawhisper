@@ -67,6 +67,14 @@ device = cuda
 compute_type = float16
 ```
 
+For AMD GPU acceleration, install ROCm and a ROCm-enabled build of `ctranslate2`, then edit `~/.config/soupawhisper/config.ini`:
+```ini
+device = amd
+compute_type = float16
+```
+
+`device = amd`, `device = rocm`, and `device = hip` are accepted aliases in SoupaWhisper. Internally, these map to the CTranslate2 GPU backend, which requires a ROCm-capable install on AMD hardware.
+
 ## Usage
 
 ```bash
@@ -77,7 +85,7 @@ poetry run python dictate.py
 - Release to transcribe → copies to clipboard and types into active input
 - Press **Ctrl+C** to quit (when running manually)
 - On media-key-first keyboards, you may need **Fn+F12** unless you switch the top row to function-key mode
-- Hotkeys can be a single key like `f12`, a combo like `ctrl+alt+v`, or alternatives like `f12, ctrl+space`
+- Hotkeys are best configured from `make debug-keys` output using exact `KEY_*` names in `.env`
 - To inspect what key your system is actually sending, run `poetry run python dictate.py --debug-keys`
 
 ## Run as a systemd Service
@@ -107,14 +115,14 @@ Edit `~/.config/soupawhisper/config.ini`:
 # Model size: tiny.en, base.en, small.en, medium.en, large-v3
 model = base.en
 
-# Device: cpu or cuda (cuda requires cuDNN)
+# Device: cpu, auto, cuda/nvidia, or amd/rocm
 device = cpu
 
 # Compute type: int8 for CPU, float16 for GPU
 compute_type = int8
 
 [hotkey]
-# Key, combo, or comma-separated alternatives: f12, ctrl+space, scroll_lock, etc.
+# Optional fallback when .env is not used. Prefer KEY_* names from --debug-keys.
 key = f12
 
 [behavior]
@@ -139,7 +147,7 @@ cp .env.example .env
 
 Example:
 ```dotenv
-SOUPAWHISPER_KEYS=f12, ctrl+space
+SOUPAWHISPER_KEYS=KEY_F12,KEY_LEFTCTRL+KEY_SPACE
 ```
 
 When `.env` is present, `SOUPAWHISPER_KEYS` overrides `[hotkey] key` from `~/.config/soupawhisper/config.ini`.
@@ -163,17 +171,18 @@ sudo usermod -aG input $USER
 
 **Wayland notes:**
 ```bash
-poetry run python dictate.py --debug-keys
+make debug-keys
 ```
-Use this to find the actual key name your keyboard is sending, then set it in `~/.config/soupawhisper/config.ini`.
+Use this to find the exact key names your keyboard is sending, then paste them into `.env`.
+
+Examples:
+```dotenv
+SOUPAWHISPER_KEYS=KEY_F12
+SOUPAWHISPER_KEYS=KEY_LEFTCTRL+KEY_SPACE
+SOUPAWHISPER_KEYS=KEY_F12,KEY_LEFTCTRL+KEY_SPACE
+```
 
 On Wayland, SoupaWhisper only watches keyboard events for the configured hotkey. It does not grab or replay your keyboard input, because partial grabs can leave mismatched key press/release state behind.
-
-Use a non-typing hotkey such as `F12`, `Scroll Lock`, or `Pause` on Wayland. If you bind a normal character key, that key can still reach the focused app.
-
-Modifier combos such as `ctrl+alt+v` are supported on Wayland, but they can still conflict with application shortcuts because the key events are not grabbed.
-
-You can also configure multiple alternatives such as `f12, ctrl+space` if you switch between keyboards.
 
 On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not work in native Wayland apps.
 
@@ -182,6 +191,9 @@ On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not 
 Unable to load any of {libcudnn_ops.so.9...}
 ```
 Install cuDNN 9 (see GPU Support section above) or switch to CPU mode.
+
+**AMD ROCm errors with GPU:**
+If `device = amd` fails at startup, the most common cause is that `ctranslate2` is still using the default non-ROCm wheel or ROCm is not installed on the system. In that case, switch back to `device = cpu` until the ROCm stack is installed.
 
 ## Model Sizes
 
