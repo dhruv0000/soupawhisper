@@ -24,55 +24,171 @@ from faster_whisper import WhisperModel
 
 __version__ = "0.1.0"
 
-# Load configuration
+PROJECT_DIR = Path(__file__).resolve().parent
+ENV_PATH = PROJECT_DIR / ".env"
 CONFIG_PATH = Path.home() / ".config" / "soupawhisper" / "config.ini"
+DEFAULT_CONFIG = {
+    "model": "base.en",
+    "device": "cpu",
+    "compute_type": "int8",
+    "key": "f12",
+    "auto_type": "true",
+    "notifications": "true",
+}
+DEPENDENCY_PACKAGES = {
+    "arecord": "alsa-utils",
+    "xclip": "xclip",
+    "xdotool": "xdotool",
+}
+
+
+def load_env_file(env_path):
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+
+        os.environ.setdefault(key, value)
 
 
 def load_config():
     config = configparser.ConfigParser()
 
-    defaults = {
-        "model": "base.en",
-        "device": "cpu",
-        "compute_type": "int8",
-        "key": "f12",
-        "auto_type": "true",
-        "notifications": "true",
-    }
-
     if CONFIG_PATH.exists():
         config.read(CONFIG_PATH)
 
+    env_hotkeys = (
+        os.environ.get("SOUPAWHISPER_KEYS")
+        or os.environ.get("SOUPAWHISPER_HOTKEYS")
+    )
+
     return {
-        "model": config.get("whisper", "model", fallback=defaults["model"]),
-        "device": config.get("whisper", "device", fallback=defaults["device"]),
-        "compute_type": config.get("whisper", "compute_type", fallback=defaults["compute_type"]),
-        "key": config.get("hotkey", "key", fallback=defaults["key"]),
+        "model": config.get("whisper", "model", fallback=DEFAULT_CONFIG["model"]),
+        "device": config.get("whisper", "device", fallback=DEFAULT_CONFIG["device"]),
+        "compute_type": config.get("whisper", "compute_type", fallback=DEFAULT_CONFIG["compute_type"]),
+        "key": env_hotkeys or config.get("hotkey", "key", fallback=DEFAULT_CONFIG["key"]),
         "auto_type": config.getboolean("behavior", "auto_type", fallback=True),
         "notifications": config.getboolean("behavior", "notifications", fallback=True),
     }
 
 
+load_env_file(ENV_PATH)
 CONFIG = load_config()
 SESSION_TYPE = os.environ.get("XDG_SESSION_TYPE", "unknown").lower() or "unknown"
 PYNPUT_KEYBOARD = None
+HOTKEY_ALIASES = {
+    "control": "ctrl",
+    "ctl": "ctrl",
+    "option": "alt",
+    "super": "meta",
+    "win": "meta",
+    "windows": "meta",
+    "cmd": "meta",
+    "command": "meta",
+    "escape": "esc",
+    "return": "enter",
+    "spacebar": "space",
+    "scrolllock": "scroll_lock",
+    "capslock": "caps_lock",
+    "numlock": "num_lock",
+    "pageup": "page_up",
+    "pagedown": "page_down",
+    "pgup": "page_up",
+    "pgdn": "page_down",
+    "leftctrl": "left_ctrl",
+    "leftcontrol": "left_ctrl",
+    "ctrl_l": "left_ctrl",
+    "rightctrl": "right_ctrl",
+    "rightcontrol": "right_ctrl",
+    "ctrl_r": "right_ctrl",
+    "leftalt": "left_alt",
+    "alt_l": "left_alt",
+    "rightalt": "right_alt",
+    "alt_r": "right_alt",
+    "altgr": "right_alt",
+    "alt_gr": "right_alt",
+    "leftshift": "left_shift",
+    "shift_l": "left_shift",
+    "rightshift": "right_shift",
+    "shift_r": "right_shift",
+    "leftmeta": "left_meta",
+    "meta_l": "left_meta",
+    "super_l": "left_meta",
+    "win_l": "left_meta",
+    "cmd_l": "left_meta",
+    "rightmeta": "right_meta",
+    "meta_r": "right_meta",
+    "super_r": "right_meta",
+    "win_r": "right_meta",
+    "cmd_r": "right_meta",
+}
+HOTKEY_MATCH_ALIASES = {
+    "ctrl": frozenset({"ctrl", "left_ctrl", "right_ctrl"}),
+    "alt": frozenset({"alt", "left_alt", "right_alt"}),
+    "shift": frozenset({"shift", "left_shift", "right_shift"}),
+    "meta": frozenset({"meta", "left_meta", "right_meta"}),
+}
+EVDEV_KEY_ALIASES = {
+    "esc": "KEY_ESC",
+    "enter": "KEY_ENTER",
+    "page_up": "KEY_PAGEUP",
+    "page_down": "KEY_PAGEDOWN",
+    "scroll_lock": "KEY_SCROLLLOCK",
+    "caps_lock": "KEY_CAPSLOCK",
+    "num_lock": "KEY_NUMLOCK",
+    "left_ctrl": "KEY_LEFTCTRL",
+    "right_ctrl": "KEY_RIGHTCTRL",
+    "left_alt": "KEY_LEFTALT",
+    "right_alt": "KEY_RIGHTALT",
+    "left_shift": "KEY_LEFTSHIFT",
+    "right_shift": "KEY_RIGHTSHIFT",
+    "left_meta": "KEY_LEFTMETA",
+    "right_meta": "KEY_RIGHTMETA",
+}
+EVDEV_GROUP_CODES = {
+    "ctrl": frozenset({ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL}),
+    "alt": frozenset({ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT}),
+    "shift": frozenset({ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT}),
+    "meta": frozenset({ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA}),
+}
 
 
 def normalize_key_name(key_name):
     return key_name.strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def get_pynput_hotkey(key_name):
-    """Map key name to a pynput key."""
-    keyboard = get_pynput_keyboard()
-    key_name = normalize_key_name(key_name)
-    if hasattr(keyboard.Key, key_name):
-        return getattr(keyboard.Key, key_name)
-    if len(key_name) == 1:
-        return keyboard.KeyCode.from_char(key_name)
+def canonicalize_hotkey_part(key_name):
+    return HOTKEY_ALIASES.get(normalize_key_name(key_name), normalize_key_name(key_name))
 
-    print(f"Unknown pynput key: {key_name}, defaulting to f12")
-    return keyboard.Key.f12
+
+def parse_hotkey(key_name):
+    return tuple(
+        canonicalize_hotkey_part(part)
+        for part in key_name.split("+")
+        if normalize_key_name(part)
+    )
+
+
+def parse_hotkeys(key_names):
+    return tuple(
+        hotkey
+        for hotkey in (parse_hotkey(key_name) for key_name in key_names.split(","))
+        if hotkey
+    )
 
 
 def get_pynput_keyboard():
@@ -87,28 +203,94 @@ def get_pynput_keyboard():
     return PYNPUT_KEYBOARD
 
 
-def get_evdev_hotkey(key_name):
-    """Map key name to an evdev keycode."""
-    key_name = normalize_key_name(key_name)
+def get_pynput_key_name(key):
+    key_name = getattr(key, "name", None)
+    if key_name:
+        return canonicalize_hotkey_part(key_name)
 
-    if key_name.startswith("key_"):
-        candidate = key_name.upper()
-    elif len(key_name) == 1 and key_name.isalnum():
-        candidate = f"KEY_{key_name.upper()}"
-    else:
-        candidate = f"KEY_{key_name.upper()}"
+    char = getattr(key, "char", None)
+    if char == " ":
+        return "space"
+    if char:
+        return canonicalize_hotkey_part(char)
 
-    return getattr(ecodes, candidate, None)
-
-
-def format_hotkey_name(key_name):
-    key_name = normalize_key_name(key_name)
-    return key_name.upper() if len(key_name) == 1 else key_name
+    return None
 
 
-HOTKEY = None if SESSION_TYPE == "wayland" else get_pynput_hotkey(CONFIG["key"])
-EVDEV_HOTKEY = get_evdev_hotkey(CONFIG["key"])
-HOTKEY_LABEL = format_hotkey_name(CONFIG["key"])
+def get_evdev_hotkey_codes(key_name):
+    """Map a hotkey part to one or more evdev keycodes."""
+    key_name = canonicalize_hotkey_part(key_name)
+
+    if key_name in EVDEV_GROUP_CODES:
+        return EVDEV_GROUP_CODES[key_name]
+
+    candidate = EVDEV_KEY_ALIASES.get(key_name, f"KEY_{key_name.upper()}")
+    keycode = getattr(ecodes, candidate, None)
+    if keycode is None:
+        return None
+
+    return frozenset({keycode})
+
+
+def build_evdev_hotkeys(hotkeys):
+    supported_hotkeys = []
+    unsupported_hotkeys = []
+
+    for hotkey in hotkeys:
+        hotkey_codes = []
+        unsupported_parts = []
+
+        for part in hotkey:
+            keycodes = get_evdev_hotkey_codes(part)
+            if keycodes is None:
+                unsupported_parts.append(part)
+                continue
+            hotkey_codes.append(keycodes)
+
+        if unsupported_parts:
+            unsupported_hotkeys.append((hotkey, tuple(unsupported_parts)))
+        else:
+            supported_hotkeys.append(tuple(hotkey_codes))
+
+    return tuple(supported_hotkeys), tuple(unsupported_hotkeys)
+
+
+def get_evdev_key_name(code):
+    key_name = ecodes.KEY.get(code)
+    if isinstance(key_name, list):
+        key_name = key_name[0]
+    if not key_name:
+        return None
+    if key_name.startswith("KEY_"):
+        key_name = key_name[4:]
+    return canonicalize_hotkey_part(key_name)
+
+
+def get_hotkey_match_names(key_part):
+    return HOTKEY_MATCH_ALIASES.get(key_part, frozenset({key_part}))
+
+
+def format_hotkey_part(key_part):
+    if len(key_part) == 1 and key_part.isalnum():
+        return key_part.upper()
+    return key_part.replace("_", " ").title()
+
+
+def format_hotkey_name(key_parts):
+    return "+".join(format_hotkey_part(part) for part in key_parts)
+
+
+def format_hotkey_names(hotkeys):
+    return ", ".join(format_hotkey_name(hotkey) for hotkey in hotkeys)
+
+
+HOTKEYS = parse_hotkeys(CONFIG["key"])
+HOTKEY_MATCH_GROUPS = tuple(
+    tuple(get_hotkey_match_names(part) for part in hotkey)
+    for hotkey in HOTKEYS
+)
+EVDEV_HOTKEY_GROUPS, EVDEV_UNSUPPORTED_HOTKEYS = build_evdev_hotkeys(HOTKEYS)
+HOTKEY_LABEL = format_hotkey_names(HOTKEYS) if HOTKEYS else CONFIG["key"].strip()
 MODEL_SIZE = CONFIG["model"]
 DEVICE = CONFIG["device"]
 COMPUTE_TYPE = CONFIG["compute_type"]
@@ -129,6 +311,43 @@ def user_is_listed_in_group(group_name):
     return os.environ.get("USER", "") in group.gr_mem
 
 
+def supports_evdev_hotkey(capabilities):
+    capability_set = {
+        capability[0] if isinstance(capability, tuple) else capability
+        for capability in capabilities
+    }
+    return any(
+        all(bool(part_codes & capability_set) for part_codes in hotkey_codes)
+        for hotkey_codes in EVDEV_HOTKEY_GROUPS
+    )
+
+
+def iter_key_events(devices, hotkey_only=False, on_device_removed=None):
+    while True:
+        ready, _, _ = select(list(devices.values()), [], [], 2.0)
+        if not ready:
+            refresh_keyboard_devices(devices, hotkey_only=hotkey_only)
+            if hotkey_only and not devices:
+                time.sleep(0.5)
+            continue
+
+        for device in ready:
+            try:
+                events = device.read()
+            except OSError as e:
+                if e.errno == errno.ENODEV:
+                    devices.pop(device.path, None)
+                    if on_device_removed is not None:
+                        on_device_removed()
+                    refresh_keyboard_devices(devices, hotkey_only=hotkey_only)
+                    continue
+                raise
+
+            for event in events:
+                if event.type == ecodes.EV_KEY:
+                    yield device, event
+
+
 def get_keyboard_devices(hotkey_only=False):
     devices = {}
 
@@ -139,7 +358,7 @@ def get_keyboard_devices(hotkey_only=False):
             continue
 
         capabilities = device.capabilities().get(ecodes.EV_KEY, [])
-        if capabilities and (not hotkey_only or EVDEV_HOTKEY in capabilities):
+        if capabilities and (not hotkey_only or supports_evdev_hotkey(capabilities)):
             devices[path] = device
         else:
             device.close()
@@ -157,7 +376,7 @@ def refresh_keyboard_devices(devices, hotkey_only=False):
             continue
 
         capabilities = device.capabilities().get(ecodes.EV_KEY, [])
-        if not capabilities or (hotkey_only and EVDEV_HOTKEY not in capabilities):
+        if not capabilities or (hotkey_only and not supports_evdev_hotkey(capabilities)):
             device.close()
             continue
 
@@ -198,27 +417,12 @@ def debug_keys():
         print(f"  {device.path}: {device.name}")
 
     try:
-        while True:
-            ready, _, _ = select(list(devices.values()), [], [], 2.0)
-            if not ready:
-                refresh_keyboard_devices(devices)
-                continue
-            for device in ready:
-                try:
-                    events = device.read()
-                except OSError as e:
-                    if e.errno == errno.ENODEV:
-                        devices.pop(device.path, None)
-                        refresh_keyboard_devices(devices)
-                        continue
-                    raise
-
-                for event in events:
-                    if event.type != ecodes.EV_KEY:
-                        continue
-                    key_name = ecodes.KEY.get(event.code, f"KEY_{event.code}")
-                    action = {0: "up", 1: "down", 2: "hold"}.get(event.value, str(event.value))
-                    print(f"{device.name}: {key_name} {action}", flush=True)
+        for device, event in iter_key_events(devices):
+            key_name = ecodes.KEY.get(event.code, f"KEY_{event.code}")
+            action = {0: "up", 1: "down", 2: "hold"}.get(event.value, str(event.value))
+            print(f"{device.name}: {key_name} {action}", flush=True)
+    except KeyboardInterrupt:
+        print()
     finally:
         close_keyboard_devices(devices)
 
@@ -232,8 +436,10 @@ class Dictation:
         self.model = None
         self.model_loaded = threading.Event()
         self.model_error = None
-        self.running = True
         self.state_lock = threading.Lock()
+        self.pynput_pressed_keys = set()
+        self.evdev_pressed_keys = set()
+        self.hotkey_active = False
 
         print(f"Loading Whisper model ({MODEL_SIZE})...")
         threading.Thread(target=self._load_model, daemon=True).start()
@@ -268,6 +474,36 @@ class Dictation:
             ],
             capture_output=True,
         )
+
+    def copy_text_to_clipboard(self, text):
+        process = subprocess.Popen(
+            ["xclip", "-selection", "clipboard"],
+            stdin=subprocess.PIPE,
+        )
+        process.communicate(input=text.encode())
+
+    def auto_type_text(self, text):
+        if not AUTO_TYPE:
+            return False
+
+        result = subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", text],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return False
+
+        error_text = (result.stderr or result.stdout or "xdotool failed").strip()
+        print(f"Auto-type failed: {error_text}")
+        return True
+
+    def update_pressed_keys(self, pressed_keys, key_name, is_pressed):
+        if is_pressed:
+            pressed_keys.add(key_name)
+        else:
+            pressed_keys.discard(key_name)
+        self.update_hotkey_state(pressed_keys)
 
     def start_recording(self):
         with self.state_lock:
@@ -307,7 +543,8 @@ class Dictation:
             self.temp_file = temp_file.name
 
         print("Recording...")
-        self.notify("Recording...", f"Release {HOTKEY_LABEL.upper()} when done", "audio-input-microphone", 30000)
+        release_hint = HOTKEY_LABEL if len(HOTKEYS) == 1 else "the hotkey"
+        self.notify("Recording...", f"Release {release_hint} when done", "audio-input-microphone", 30000)
 
     def stop_recording(self):
         with self.state_lock:
@@ -361,23 +598,8 @@ class Dictation:
             text = " ".join(segment.text.strip() for segment in segments)
 
             if text:
-                process = subprocess.Popen(
-                    ["xclip", "-selection", "clipboard"],
-                    stdin=subprocess.PIPE,
-                )
-                process.communicate(input=text.encode())
-
-                auto_type_failed = False
-                if AUTO_TYPE:
-                    result = subprocess.run(
-                        ["xdotool", "type", "--clearmodifiers", text],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode != 0:
-                        auto_type_failed = True
-                        error_text = (result.stderr or result.stdout or "xdotool failed").strip()
-                        print(f"Auto-type failed: {error_text}")
+                self.copy_text_to_clipboard(text)
+                auto_type_failed = self.auto_type_text(text)
 
                 print(f"Copied: {text}")
                 if auto_type_failed:
@@ -397,17 +619,33 @@ class Dictation:
             with self.state_lock:
                 self.processing = False
 
-    def on_press(self, key):
-        if key == HOTKEY:
+    def update_hotkey_state(self, pressed_keys):
+        hotkey_pressed = any(
+            all(bool(match_names & pressed_keys) for match_names in hotkey_match_parts)
+            for hotkey_match_parts in HOTKEY_MATCH_GROUPS
+        )
+
+        if hotkey_pressed and not self.hotkey_active:
+            self.hotkey_active = True
             self.start_recording()
+        elif not hotkey_pressed and self.hotkey_active:
+            self.hotkey_active = False
+            self.stop_recording()
+
+    def on_press(self, key):
+        key_name = get_pynput_key_name(key)
+        if key_name is None:
+            return
+        self.update_pressed_keys(self.pynput_pressed_keys, key_name, True)
 
     def on_release(self, key):
-        if key == HOTKEY:
-            self.stop_recording()
+        key_name = get_pynput_key_name(key)
+        if key_name is None:
+            return
+        self.update_pressed_keys(self.pynput_pressed_keys, key_name, False)
 
     def stop(self):
         print("\nExiting...")
-        self.running = False
         os._exit(0)
 
     def run_pynput_listener(self):
@@ -417,8 +655,15 @@ class Dictation:
             listener.join()
 
     def run_evdev_listener(self):
-        if EVDEV_HOTKEY is None:
+        if not HOTKEYS:
+            print(f"Invalid hotkey: {CONFIG['key']}")
+            print("Set [hotkey] key to a key name such as f12, a combo like ctrl+space, or a list like f12, ctrl+space.")
+            sys.exit(1)
+
+        if not EVDEV_HOTKEY_GROUPS:
             print(f"Unsupported evdev hotkey: {CONFIG['key']}")
+            for hotkey, unsupported_parts in EVDEV_UNSUPPORTED_HOTKEYS:
+                print(f"Unsupported part(s) for {format_hotkey_name(hotkey)}: {', '.join(unsupported_parts)}")
             print("Use: poetry run python dictate.py --debug-keys")
             sys.exit(1)
 
@@ -436,36 +681,36 @@ class Dictation:
 
         print(f"Wayland detected. Using evdev global hotkey listener for [{HOTKEY_LABEL}].")
         print("Keyboard devices are only watched on Wayland; they are not grabbed.")
-        print(f"Use a non-typing hotkey such as [{HOTKEY_LABEL}] to avoid stray key input.")
+        if EVDEV_UNSUPPORTED_HOTKEYS:
+            for hotkey, unsupported_parts in EVDEV_UNSUPPORTED_HOTKEYS:
+                print(f"Ignoring unsupported hotkey [{format_hotkey_name(hotkey)}]: {', '.join(unsupported_parts)}")
+        if any(len(part) == 1 and part.isalnum() for hotkey in HOTKEYS for part in hotkey):
+            print("Wayland note: character-key hotkeys can still reach the focused app.")
+            print("Dedicated keys like F12, Scroll Lock, or Pause are less likely to conflict.")
         if AUTO_TYPE:
             print("Wayland note: clipboard copy should work, but xdotool auto-typing may fail in native Wayland apps.")
 
         try:
-            while True:
-                ready, _, _ = select(list(devices.values()), [], [], 2.0)
-                if not ready:
-                    refresh_keyboard_devices(devices, hotkey_only=True)
-                    if not devices:
-                        time.sleep(0.5)
+            for _device, event in iter_key_events(
+                devices,
+                hotkey_only=True,
+                on_device_removed=self.handle_evdev_device_removed,
+            ):
+                key_name = get_evdev_key_name(event.code)
+                if key_name is None:
                     continue
-                for device in ready:
-                    try:
-                        events = device.read()
-                    except OSError as e:
-                        if e.errno == errno.ENODEV:
-                            devices.pop(device.path, None)
-                            refresh_keyboard_devices(devices, hotkey_only=True)
-                            continue
-                        raise
 
-                    for event in events:
-                        if event.type == ecodes.EV_KEY and event.code == EVDEV_HOTKEY:
-                            if event.value == 1:
-                                self.start_recording()
-                            elif event.value == 0:
-                                self.stop_recording()
+                self.update_pressed_keys(
+                    self.evdev_pressed_keys,
+                    key_name,
+                    event.value in (1, 2),
+                )
         finally:
             close_keyboard_devices(devices)
+
+    def handle_evdev_device_removed(self):
+        self.evdev_pressed_keys.clear()
+        self.update_hotkey_state(self.evdev_pressed_keys)
 
     def run(self):
         if SESSION_TYPE == "wayland":
@@ -481,11 +726,10 @@ def check_dependencies():
 
     for cmd in ["arecord", "xclip"]:
         if shutil.which(cmd) is None:
-            pkg = "alsa-utils" if cmd == "arecord" else cmd
-            missing.append((cmd, pkg))
+            missing.append((cmd, DEPENDENCY_PACKAGES[cmd]))
 
     if AUTO_TYPE and shutil.which("xdotool") is None:
-        missing.append(("xdotool", "xdotool"))
+        missing.append(("xdotool", DEPENDENCY_PACKAGES["xdotool"]))
 
     if missing:
         print("Missing dependencies:")

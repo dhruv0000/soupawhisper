@@ -77,6 +77,7 @@ poetry run python dictate.py
 - Release to transcribe → copies to clipboard and types into active input
 - Press **Ctrl+C** to quit (when running manually)
 - On media-key-first keyboards, you may need **Fn+F12** unless you switch the top row to function-key mode
+- Hotkeys can be a single key like `f12`, a combo like `ctrl+alt+v`, or alternatives like `f12, ctrl+space`
 - To inspect what key your system is actually sending, run `poetry run python dictate.py --debug-keys`
 
 ## Run as a systemd Service
@@ -113,7 +114,7 @@ device = cpu
 compute_type = int8
 
 [hotkey]
-# Key to hold for recording: f12, scroll_lock, pause, etc.
+# Key, combo, or comma-separated alternatives: f12, ctrl+space, scroll_lock, etc.
 key = f12
 
 [behavior]
@@ -130,6 +131,18 @@ mkdir -p ~/.config/soupawhisper
 # ./ is '/path/to/soupawhisper/'
 cp ./config.example.ini ~/.config/soupawhisper/config.ini
 ```
+
+To override hotkeys from the repo checkout instead, create `.env` from `.env.example`:
+```bash
+cp .env.example .env
+```
+
+Example:
+```dotenv
+SOUPAWHISPER_KEYS=f12, ctrl+space
+```
+
+When `.env` is present, `SOUPAWHISPER_KEYS` overrides `[hotkey] key` from `~/.config/soupawhisper/config.ini`.
 
 ## Troubleshooting
 
@@ -157,6 +170,10 @@ Use this to find the actual key name your keyboard is sending, then set it in `~
 On Wayland, SoupaWhisper only watches keyboard events for the configured hotkey. It does not grab or replay your keyboard input, because partial grabs can leave mismatched key press/release state behind.
 
 Use a non-typing hotkey such as `F12`, `Scroll Lock`, or `Pause` on Wayland. If you bind a normal character key, that key can still reach the focused app.
+
+Modifier combos such as `ctrl+alt+v` are supported on Wayland, but they can still conflict with application shortcuts because the key events are not grabbed.
+
+You can also configure multiple alternatives such as `f12, ctrl+space` if you switch between keyboards.
 
 On Wayland, clipboard copy should still work, but `xdotool` auto-typing may not work in native Wayland apps.
 
